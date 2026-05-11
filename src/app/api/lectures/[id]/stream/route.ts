@@ -4,7 +4,7 @@ import { runContentAgent, generateLectureNotes } from "@/lib/agents/content-agen
 import { embedChunks } from "@/lib/agents/search-agent"
 import type { Chunk, ProcessingEvent } from "@/types"
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 function sseEvent(data: ProcessingEvent): string {
   return `data: ${JSON.stringify(data)}\n\n`

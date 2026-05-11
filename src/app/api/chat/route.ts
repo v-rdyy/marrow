@@ -5,7 +5,7 @@ import { extractPdfText } from "@/lib/pdf-extract"
 import Anthropic from "@anthropic-ai/sdk"
 import type { ContextItem, ToolCallRecord } from "@/types"
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 type HistoryMsg = { role: "user" | "assistant"; content: string }
 type AttachmentPayload = { name: string; base64: string; mimeType: string }
