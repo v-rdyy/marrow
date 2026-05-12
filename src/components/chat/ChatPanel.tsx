@@ -8,7 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { ClaimSource } from "@/components/lecture/ClaimSource"
 import { useContextStore } from "@/stores/context-store"
 import { useScreenshotStore } from "@/stores/screenshot-store"
-import { useChatStore, selectMessages, selectCreatedDocs } from "@/stores/chat-store"
+import { useChatStore } from "@/stores/chat-store"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
@@ -130,15 +130,12 @@ export function ChatPanel({ lectureId, lectureTitle, isFullscreen, onToggleFulls
   const [editText, setEditText] = useState("")
 
   const pathname = usePathname()
-  const setScope = useChatStore((s) => s.setScope)
+  const { messages, createdDocs, addMessage, updateMessage, truncateTo, setCreatedDoc, clear, notifyDocumentCreated, setScope } = useChatStore()
+
   useEffect(() => {
     const scope = pathname.split("/").filter(Boolean).pop() ?? "global"
     setScope(scope)
   }, [pathname, setScope])
-
-  const messages = useChatStore(selectMessages)
-  const createdDocs = useChatStore(selectCreatedDocs)
-  const { addMessage, updateMessage, truncateTo, setCreatedDoc, clear, notifyDocumentCreated } = useChatStore()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const msgRefsMap = useRef<Map<string, HTMLDivElement>>(new Map())
   const { items: storeItems, remove: removeContextItem, lectureContext } = useContextStore()
