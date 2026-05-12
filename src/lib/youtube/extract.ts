@@ -152,18 +152,81 @@ async function transcribeWithWhisper(videoId: string): Promise<TranscriptResult>
   }
 }
 
+// Attempt 2: YouTube innertube API (Android client) — works on cloud IPs where scraping is blocked
+async function fetchCaptionsViaInnertube(videoId: string): Promise<TranscriptResult> {
+  try {
+    const playerRes = await fetch(
+      "https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "com.google.android.youtube/17.31.35 (Linux; U; Android 11) gzip",
+        },
+        body: JSON.stringify({
+          context: { client: { clientName: "ANDROID", clientVersion: "17.31.35", androidSdkVersion: 30, hl: "en", gl: "US" } },
+          videoId,
+        }),
+      }
+    )
+    if (!playerRes.ok) return { ok: false, error: "no_captions", message: "YouTube API unavailable." }
+
+    const playerData = await playerRes.json()
+    const status = playerData?.playabilityStatus?.status
+    if (status === "LOGIN_REQUIRED") return { ok: false, error: "private_video", message: "This video is private." }
+    if (status === "LIVE_STREAM_OFFLINE" || playerData?.videoDetails?.isLive) {
+      return { ok: false, error: "livestream", message: "Live streams can't be processed." }
+    }
+
+    const tracks: { languageCode: string; kind?: string; baseUrl: string }[] =
+      playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? []
+    if (tracks.length === 0) return { ok: false, error: "no_captions", message: "No captions available." }
+
+    // Prefer English auto-generated, then any English, then first available
+    const track =
+      tracks.find((t) => t.languageCode === "en" && t.kind === "asr") ||
+      tracks.find((t) => t.languageCode.startsWith("en")) ||
+      tracks[0]
+
+    const captionRes = await fetch(`${track.baseUrl}&fmt=json3`)
+    if (!captionRes.ok) return { ok: false, error: "no_captions", message: "Could not fetch caption data." }
+
+    const captionData = await captionRes.json()
+    const events: { segs?: { utf8?: string }[]; tStartMs?: number; dDurationMs?: number }[] = captionData.events ?? []
+
+    const rawItems = events
+      .filter((e) => e.segs)
+      .map((e) => ({
+        text: e.segs!.map((s) => s.utf8 ?? "").join("").replace(/\n/g, " ").trim(),
+        start: (e.tStartMs ?? 0) / 1000,
+        end: ((e.tStartMs ?? 0) + (e.dDurationMs ?? 3000)) / 1000,
+      }))
+      .filter((item) => item.text.length > 0)
+
+    if (rawItems.length === 0) return { ok: false, error: "no_captions", message: "No caption content." }
+
+    return { ok: true, chunks: buildChunks(rawItems), rawText: rawItems.map((i) => i.text).join(" "), source: "captions" }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes("private")) return { ok: false, error: "private_video", message: "This video is private." }
+    return { ok: false, error: "no_captions", message: "Could not fetch captions via innertube." }
+  }
+}
+
 export async function fetchTranscript(videoId: string): Promise<TranscriptResult> {
-  // Fast path: YouTube captions
+  // Attempt 1: youtube-transcript scraper (fast, works on most IPs)
   const captions = await fetchCaptions(videoId)
   if (captions.ok) return captions
+  if (captions.error === "private_video" || captions.error === "livestream") return captions
 
-  // Don't fall back to Whisper for hard blockers — private or live stream
-  if (captions.error === "private_video" || captions.error === "livestream") {
-    return captions
-  }
+  // Attempt 2: YouTube innertube API (Android client — works on Vercel IPs)
+  console.log(`[ingest] Scraper blocked for ${videoId}, trying innertube`)
+  const innertube = await fetchCaptionsViaInnertube(videoId)
+  if (innertube.ok) return innertube
+  if (innertube.error === "private_video" || innertube.error === "livestream") return innertube
 
-  // Fallback: AI transcription via Whisper
-  console.log(`[ingest] No captions for ${videoId}, falling back to Whisper`)
+  // Attempt 3: Whisper transcription via audio download
+  console.log(`[ingest] Innertube failed for ${videoId}, falling back to Whisper`)
   return transcribeWithWhisper(videoId)
 }
 
