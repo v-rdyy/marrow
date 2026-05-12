@@ -4,7 +4,6 @@ import { motion } from "framer-motion"
 import { Folder, MoreHorizontal, Trash2, Pencil, MoveRight } from "lucide-react"
 import { useState, useRef } from "react"
 import type { Folder as FolderType } from "@/types"
-import { itemColor } from "@/types"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,19 +19,11 @@ interface Props {
   onMove?: () => void
 }
 
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return `rgba(${r},${g},${b},${alpha})`
-}
-
 export function FolderCard({ folder, onOpen, onDelete, onRename, onMove }: Props) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState(folder.name)
   const inputRef = useRef<HTMLInputElement>(null)
   const count = (folder.lectureCount ?? 0) + (folder.documentCount ?? 0)
-  const cardColor = itemColor(folder.id)
 
   function startRename() {
     setRenaming(true)
@@ -55,34 +46,16 @@ export function FolderCard({ folder, onOpen, onDelete, onRename, onMove }: Props
       onClick={renaming ? undefined : onOpen}
     >
       {/* Tab piece — ThinkEx signature */}
-      <div
-        className="absolute left-0 top-0 h-[10%] w-[35%] rounded-t-md"
-        style={{
-          backgroundColor: hexToRgba(cardColor, 0.18),
-          borderWidth: 1,
-          borderStyle: "solid",
-          borderColor: hexToRgba(cardColor, 0.45),
-          borderBottomWidth: 0,
-        }}
-      />
+      <div className="absolute left-0 top-0 h-[10%] w-[35%] rounded-t-md border border-b-0 border-border bg-card" />
 
       {/* Body piece */}
-      <div
-        className="absolute bottom-0 left-0 right-0 top-[10%] rounded-md rounded-tl-none overflow-hidden shadow-sm transition-shadow duration-200 group-hover:shadow-lg"
-        style={{
-          backgroundColor: hexToRgba(cardColor, 0.12),
-          borderWidth: 1,
-          borderStyle: "solid",
-          borderColor: hexToRgba(cardColor, 0.45),
-        }}
-      >
+      <div className="absolute bottom-0 left-0 right-0 top-[10%] rounded-md rounded-tl-none overflow-hidden border border-border bg-card shadow-sm transition-all duration-200 group-hover:shadow-md group-hover:border-foreground/25">
         <div className="flex flex-col h-full p-3">
           {/* Icon */}
           <div className="flex-1 flex items-start pt-1">
             <Folder
-              className="h-8 w-8 transition-colors"
+              className="h-8 w-8 text-foreground/35 group-hover:text-foreground/55 transition-colors"
               strokeWidth={1}
-              style={{ color: hexToRgba(cardColor, 0.7) }}
             />
           </div>
 

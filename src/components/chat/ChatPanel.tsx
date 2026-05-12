@@ -461,13 +461,19 @@ export function ChatPanel({ lectureId, lectureTitle, isFullscreen, onToggleFulls
                     )
                   ) : (
                     <div className="max-w-[92%] flex flex-col gap-1.5">
-                    {msg.reasoning && msg.reasoning.length > 0 && (
+                    {streaming?.id === msg.id && streaming.reasoning.length > 0 ? (
+                      <div className="flex flex-col gap-1">
+                        {streaming.reasoning.map((entry) => (
+                          <LiveToolCallPill key={entry.id} entry={entry} />
+                        ))}
+                      </div>
+                    ) : msg.reasoning && msg.reasoning.length > 0 ? (
                       <div className="flex flex-col gap-1">
                         {msg.reasoning.map((r, i) => (
                           <ToolCallPill key={i} r={r} />
                         ))}
                       </div>
-                    )}
+                    ) : null}
                     <div className="text-sm leading-relaxed text-foreground prose prose-sm prose-invert max-w-none
                       [&_p]:mb-2 [&_p:last-child]:mb-0
                       [&_ul]:mb-2 [&_ul]:pl-4 [&_ul]:list-disc

@@ -45,7 +45,7 @@ export function WorkspaceInterior({ workspaceId, workspaceName, breadcrumb = [] 
   const [refreshKey, setRefreshKey] = useState(0)
   const [createFolderOpen, setCreateFolderOpen] = useState(false)
   const [addLectureOpen, setAddLectureOpen] = useState(false)
-  const [uploading, setUploading] = useState(false)
+  const [uploadingName, setUploadingName] = useState<string | null>(null)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const dragCounterRef = useRef(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -266,17 +266,19 @@ export function WorkspaceInterior({ workspaceId, workspaceName, breadcrumb = [] 
 
   async function uploadFile(file: File) {
     if (!file || file.type !== "application/pdf") return
-    setUploading(true)
+    setUploadingName(file.name.replace(/\.pdf$/i, ""))
     try {
       const formData = new FormData()
       formData.append("file", file)
       formData.append("folderId", workspaceId)
       const res = await fetch("/api/uploads", { method: "POST", body: formData })
       const data = await res.json()
-      if (!res.ok) { alert(data.error ?? "Upload failed"); return }
+      if (!res.ok) { setUploadingName(null); alert(data.error ?? "Upload failed"); return }
+      setUploadingName(null)
       refresh()
+    } catch {
+      setUploadingName(null)
     } finally {
-      setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ""
     }
   }
@@ -422,8 +424,6 @@ export function WorkspaceInterior({ workspaceId, workspaceName, breadcrumb = [] 
 
         {/* Right: toolbar */}
         <div className="flex items-center gap-1.5 shrink-0">
-          {uploading && <span className="text-xs text-muted-foreground">Uploading…</span>}
-
           <DropdownMenu>
             <DropdownMenuTrigger className="flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-xs font-semibold hover:bg-primary/90 transition-colors">
               <Plus className="h-3.5 w-3.5" />
@@ -555,6 +555,9 @@ export function WorkspaceInterior({ workspaceId, workspaceName, breadcrumb = [] 
                   onOpen={() => router.push(`/lecture/${processingId}`)}
                 />
               )}
+              {/* Optimistic upload card */}
+              {uploadingName && <UploadingCard name={uploadingName} />}
+
               {documents.map((d) => (
                 <div key={d.id} className="relative group/card">
                   <DocumentCard
@@ -771,6 +774,24 @@ function ProcessingCard({
   )
 }
 
+function UploadingCard({ name }: { name: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="relative aspect-[4/3] rounded-md border border-border bg-card shadow-sm flex flex-col overflow-hidden"
+    >
+      <div className="flex-1 flex flex-col items-center justify-center gap-2 p-3">
+        <Loader2 className="h-5 w-5 text-muted-foreground animate-spin" />
+        <div className="text-center">
+          <p className="text-xs font-medium text-foreground truncate max-w-[120px]">{name}</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Uploading PDF…</p>
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
 // ThinkEx-style move dialog with hierarchical folder tree
 function MoveDialog({
   title,
@@ -791,12 +812,17 @@ function MoveDialog({
 }) {
   const [selected, setSelected] = useState<string | null>(null)
 
-  // Build display list: roots first, then children indented
+  // Build display list: roots first, then children indented.
+  // Skip currentFolderId itself but still recurse into its children so sub-folders are reachable.
   type FolderEntry = { id: string; name: string; depth: number }
   function buildList(parentId: string | null, depth: number): FolderEntry[] {
     return folders
-      .filter((f) => f.parentId === parentId && f.id !== currentFolderId)
-      .flatMap((f) => [{ id: f.id, name: f.name, depth }, ...buildList(f.id, depth + 1)])
+      .filter((f) => f.parentId === parentId)
+      .flatMap((f) => {
+        const children = buildList(f.id, depth + 1)
+        if (f.id === currentFolderId) return children
+        return [{ id: f.id, name: f.name, depth }, ...children]
+      })
   }
   const list = buildList(null, 0)
   const filtered = search.trim()
