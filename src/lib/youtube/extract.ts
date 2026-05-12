@@ -92,8 +92,11 @@ async function fetchCaptionsViaYoutubeJS(videoId: string): Promise<TranscriptRes
     const info = await yt.getInfo(videoId)
 
     const status = info.playability_status?.status
+    // LOGIN_REQUIRED from a cloud IP means YouTube blocked the client, not that the video is private.
+    // The scraper (attempt 1) is the reliable signal for truly private videos.
     if (status === "LOGIN_REQUIRED") {
-      return { ok: false, error: "private_video", message: "This video is private." }
+      console.log(`[ingest] youtubei.js LOGIN_REQUIRED — blocked by YouTube, not private`)
+      return { ok: false, error: "no_captions", message: "YouTube blocked this request." }
     }
     if (status === "LIVE_STREAM_OFFLINE" || info.basic_info?.is_live) {
       return { ok: false, error: "livestream", message: "Live streams can't be processed." }
@@ -189,7 +192,8 @@ async function transcribeWithWhisper(videoId: string): Promise<TranscriptResult>
 
     const status = info.playability_status?.status
     if (status === "LOGIN_REQUIRED") {
-      return { ok: false, error: "private_video", message: "This video is private." }
+      console.log(`[ingest] Whisper: youtubei.js LOGIN_REQUIRED — blocked`)
+      return { ok: false, error: "unavailable", message: "Could not access this video from our servers." }
     }
     if (status === "LIVE_STREAM_OFFLINE" || info.basic_info?.is_live) {
       return { ok: false, error: "livestream", message: "Live streams can't be processed." }
@@ -303,7 +307,7 @@ export async function fetchTranscript(videoId: string): Promise<TranscriptResult
   console.log(`[ingest] Timedtext failed for ${videoId}, trying youtubei.js`)
   const yjsResult = await fetchCaptionsViaYoutubeJS(videoId)
   if (yjsResult.ok) return yjsResult
-  if (yjsResult.error === "private_video" || yjsResult.error === "livestream") return yjsResult
+  if (yjsResult.error === "livestream") return yjsResult
 
   // Attempt 4: Whisper — audio download via youtubei.js + OpenAI transcription
   console.log(`[ingest] youtubei.js failed for ${videoId}, trying Whisper`)
