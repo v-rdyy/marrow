@@ -1,21 +1,10 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { usePathname } from "next/navigation"
 import { ChatPanel } from "@/components/chat/ChatPanel"
 import { MessageSquare } from "lucide-react"
-import { useChatStore } from "@/stores/chat-store"
 
 export default function WorkspaceGroupLayout({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname()
-  const setScope = useChatStore((s) => s.setScope)
-
-  // Scope chat to the current page's ID (last path segment)
-  // /workspace/abc → "abc", /lecture/xyz → "xyz", etc.
-  useEffect(() => {
-    const scope = pathname.split("/").filter(Boolean).pop() ?? "global"
-    setScope(scope)
-  }, [pathname, setScope])
   const [chatVisible, setChatVisible] = useState(true)
   const [chatFullscreen, setChatFullscreen] = useState(false)
 

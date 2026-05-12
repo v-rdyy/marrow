@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useRef, useEffect, useCallback } from "react"
+import { usePathname } from "next/navigation"
 import { Send, Loader2, Bot, Maximize2, Minimize2, Paperclip, X, FileText, ExternalLink, Pencil, Eye, Search, Layers, Plus } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -127,6 +128,13 @@ export function ChatPanel({ lectureId, lectureTitle, isFullscreen, onToggleFulls
   const [attachment, setAttachment] = useState<Attachment | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState("")
+
+  const pathname = usePathname()
+  const setScope = useChatStore((s) => s.setScope)
+  useEffect(() => {
+    const scope = pathname.split("/").filter(Boolean).pop() ?? "global"
+    setScope(scope)
+  }, [pathname, setScope])
 
   const messages = useChatStore(selectMessages)
   const createdDocs = useChatStore(selectCreatedDocs)
