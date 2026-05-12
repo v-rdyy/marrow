@@ -47,7 +47,7 @@ export async function generateSummary(
   chunks: Chunk[],
   depth: "90s" | "5min" | "full"
 ): Promise<SummaryParagraph[]> {
-  const depthLabel = depth === "90s" ? "90-second (~200 words)" : depth === "5min" ? "5-minute (~700 words)" : "comprehensive (~2000 words)"
+  const depthLabel = depth === "90s" ? "90-second (~200 words)" : depth === "5min" ? "5-minute (~700 words)" : "comprehensive (~3000 words)"
   const structureGuide = depth === "90s"
     ? "Write 2-3 short sections. Each section: a bold key concept name, then 1-2 sentences explaining it. No headers needed."
     : depth === "5min"
@@ -56,9 +56,10 @@ export async function generateSummary(
 
   const chunksJson = chunks.map((c) => `[${c.id}] ${c.text}`).join("\n")
 
+  const tokenLimit = depth === "90s" ? 2000 : depth === "5min" ? 4000 : 8000
   const response = await getAnthropic().messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 4000,
+    max_tokens: tokenLimit,
     system: SYSTEM_PROMPT,
     messages: [
       {

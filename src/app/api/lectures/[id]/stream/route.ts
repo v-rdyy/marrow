@@ -83,18 +83,19 @@ export async function GET(
         return embeddings
       })
 
-      // Wait for main content tasks (notes run in background — don't block completed event)
-      const [outline, flashcards, summary90s, summary5min, summaryFull] = await Promise.all([
+      // Wait for all tasks including notes — notes started in parallel so no extra wall-clock cost
+      const [outline, flashcards, summary90s, summary5min, summaryFull, notes] = await Promise.all([
         outlinePromise,
         flashcardsPromise,
         summary90sPromise,
         summary5minPromise,
         summaryFullPromise,
+        notesPromise,
       ])
 
       await embedPromise
 
-      // Persist main content
+      // Persist everything in one upsert
       await supabase.from("lecture_content").upsert({
         lecture_id: id,
         chunks,
@@ -103,24 +104,17 @@ export async function GET(
         summary_5min: summary5min,
         summary_full: summaryFull,
         flashcards,
+        lecture_notes: notes.notes,
+        chunk_descriptions: notes.chunkDescriptions,
       }, { onConflict: "lecture_id" })
 
-      // Mark lecture as completed and notify frontend immediately
+      // Mark lecture as completed and notify frontend
       await supabase
         .from("lectures")
         .update({ processing_status: "completed" })
         .eq("id", id)
 
       send({ type: "completed" })
-
-      // Notes persist in background after stream closes — doesn't block the user
-      notesPromise.then(async (notes) => {
-        await supabase.from("lecture_content").upsert({
-          lecture_id: id,
-          lecture_notes: notes.notes,
-          chunk_descriptions: notes.chunkDescriptions,
-        }, { onConflict: "lecture_id" })
-      }).catch((err) => console.error("Background notes generation failed:", err))
     } catch (err) {
       console.error("Stream pipeline error:", err)
       const message = err instanceof Error ? err.message : "Processing failed."
