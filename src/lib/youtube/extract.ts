@@ -152,64 +152,163 @@ async function transcribeWithWhisper(videoId: string): Promise<TranscriptResult>
   }
 }
 
-// Attempt 2: YouTube innertube API (Android client) — works on cloud IPs where scraping is blocked
+type InnertubeClient = {
+  clientName: string
+  clientId: string
+  clientVersion: string
+  apiKey: string
+  userAgent: string
+  extra?: Record<string, unknown>
+}
+
+const INNERTUBE_CLIENTS: InnertubeClient[] = [
+  {
+    clientName: "IOS",
+    clientId: "5",
+    clientVersion: "19.45.4",
+    apiKey: "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc",
+    userAgent: "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)",
+    extra: { deviceModel: "iPhone16,2", utcOffsetMinutes: 0 },
+  },
+  {
+    clientName: "ANDROID",
+    clientId: "3",
+    clientVersion: "17.31.35",
+    apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+    userAgent: "com.google.android.youtube/17.31.35 (Linux; U; Android 11) gzip",
+    extra: { androidSdkVersion: 30 },
+  },
+  {
+    clientName: "TVHTML5",
+    clientId: "7",
+    clientVersion: "7.20241201.18.00",
+    apiKey: "AIzaSyDCU8hByM-4DrUqRUYnGn-3llEO78bcxq8",
+    userAgent: "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.5) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.5 TV Safari/538.1",
+  },
+]
+
+async function captionsFromPlayerData(
+  playerData: Record<string, unknown>
+): Promise<TranscriptResult | null> {
+  const status = (playerData?.playabilityStatus as { status?: string })?.status
+  if (status === "LOGIN_REQUIRED") return { ok: false, error: "private_video", message: "This video is private." }
+  if (
+    status === "LIVE_STREAM_OFFLINE" ||
+    (playerData?.videoDetails as { isLive?: boolean })?.isLive
+  ) {
+    return { ok: false, error: "livestream", message: "Live streams can't be processed." }
+  }
+
+  const tracks = (
+    (playerData?.captions as { playerCaptionsTracklistRenderer?: { captionTracks?: { languageCode: string; kind?: string; baseUrl: string }[] } })
+      ?.playerCaptionsTracklistRenderer?.captionTracks ?? []
+  )
+  if (tracks.length === 0) return null
+
+  const track =
+    tracks.find((t) => t.languageCode === "en" && t.kind === "asr") ||
+    tracks.find((t) => t.languageCode.startsWith("en")) ||
+    tracks[0]
+
+  const captionRes = await fetch(`${track.baseUrl}&fmt=json3`, {
+    headers: { "Accept-Language": "en-US,en;q=0.9" },
+  })
+  if (!captionRes.ok) return null
+
+  const captionData = await captionRes.json()
+  const events: { segs?: { utf8?: string }[]; tStartMs?: number; dDurationMs?: number }[] = captionData.events ?? []
+
+  const rawItems = events
+    .filter((e) => e.segs)
+    .map((e) => ({
+      text: e.segs!.map((s) => s.utf8 ?? "").join("").replace(/\n/g, " ").trim(),
+      start: (e.tStartMs ?? 0) / 1000,
+      end: ((e.tStartMs ?? 0) + (e.dDurationMs ?? 3000)) / 1000,
+    }))
+    .filter((item) => item.text.length > 0)
+
+  if (rawItems.length === 0) return null
+  return { ok: true, chunks: buildChunks(rawItems), rawText: rawItems.map((i) => i.text).join(" "), source: "captions" }
+}
+
+// Attempt 2: YouTube innertube API — tries iOS, Android, TV clients in sequence
 async function fetchCaptionsViaInnertube(videoId: string): Promise<TranscriptResult> {
-  try {
-    const playerRes = await fetch(
-      "https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": "com.google.android.youtube/17.31.35 (Linux; U; Android 11) gzip",
-        },
-        body: JSON.stringify({
-          context: { client: { clientName: "ANDROID", clientVersion: "17.31.35", androidSdkVersion: 30, hl: "en", gl: "US" } },
-          videoId,
-        }),
+  for (const client of INNERTUBE_CLIENTS) {
+    try {
+      console.log(`[ingest] Trying innertube ${client.clientName} for ${videoId}`)
+      const playerRes = await fetch(
+        `https://www.youtube.com/youtubei/v1/player?key=${client.apiKey}&prettyPrint=false`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent": client.userAgent,
+            "X-Youtube-Client-Name": client.clientId,
+            "X-Youtube-Client-Version": client.clientVersion,
+            "Origin": "https://www.youtube.com",
+          },
+          body: JSON.stringify({
+            context: {
+              client: {
+                clientName: client.clientName,
+                clientVersion: client.clientVersion,
+                hl: "en",
+                gl: "US",
+                ...(client.extra ?? {}),
+              },
+            },
+            videoId,
+          }),
+        }
+      )
+      if (!playerRes.ok) {
+        console.log(`[ingest] ${client.clientName} HTTP ${playerRes.status}`)
+        continue
       }
-    )
-    if (!playerRes.ok) return { ok: false, error: "no_captions", message: "YouTube API unavailable." }
 
-    const playerData = await playerRes.json()
-    const status = playerData?.playabilityStatus?.status
-    if (status === "LOGIN_REQUIRED") return { ok: false, error: "private_video", message: "This video is private." }
-    if (status === "LIVE_STREAM_OFFLINE" || playerData?.videoDetails?.isLive) {
-      return { ok: false, error: "livestream", message: "Live streams can't be processed." }
+      const playerData = await playerRes.json()
+      const result = await captionsFromPlayerData(playerData)
+      if (result?.ok === false && (result.error === "private_video" || result.error === "livestream")) {
+        return result
+      }
+      if (result?.ok) {
+        console.log(`[ingest] ${client.clientName} succeeded`)
+        return result
+      }
+      // null or no captions — try next client
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes("private")) return { ok: false, error: "private_video", message: "This video is private." }
+      console.log(`[ingest] ${client.clientName} threw: ${msg}`)
     }
+  }
+  return { ok: false, error: "no_captions", message: "No captions found via innertube." }
+}
 
-    const tracks: { languageCode: string; kind?: string; baseUrl: string }[] =
-      playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? []
-    if (tracks.length === 0) return { ok: false, error: "no_captions", message: "No captions available." }
+// Attempt 3: parse ytInitialPlayerResponse from the watch page HTML
+async function fetchCaptionsFromWatchPage(videoId: string): Promise<TranscriptResult> {
+  try {
+    console.log(`[ingest] Trying watch-page HTML scrape for ${videoId}`)
+    const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    })
+    if (!res.ok) return { ok: false, error: "no_captions", message: "Watch page unavailable." }
 
-    // Prefer English auto-generated, then any English, then first available
-    const track =
-      tracks.find((t) => t.languageCode === "en" && t.kind === "asr") ||
-      tracks.find((t) => t.languageCode.startsWith("en")) ||
-      tracks[0]
+    const html = await res.text()
+    const match = html.match(/var ytInitialPlayerResponse\s*=\s*(\{.+?\});\s*(?:var |<\/script>)/)
+    if (!match) return { ok: false, error: "no_captions", message: "Could not parse watch page." }
 
-    const captionRes = await fetch(`${track.baseUrl}&fmt=json3`)
-    if (!captionRes.ok) return { ok: false, error: "no_captions", message: "Could not fetch caption data." }
-
-    const captionData = await captionRes.json()
-    const events: { segs?: { utf8?: string }[]; tStartMs?: number; dDurationMs?: number }[] = captionData.events ?? []
-
-    const rawItems = events
-      .filter((e) => e.segs)
-      .map((e) => ({
-        text: e.segs!.map((s) => s.utf8 ?? "").join("").replace(/\n/g, " ").trim(),
-        start: (e.tStartMs ?? 0) / 1000,
-        end: ((e.tStartMs ?? 0) + (e.dDurationMs ?? 3000)) / 1000,
-      }))
-      .filter((item) => item.text.length > 0)
-
-    if (rawItems.length === 0) return { ok: false, error: "no_captions", message: "No caption content." }
-
-    return { ok: true, chunks: buildChunks(rawItems), rawText: rawItems.map((i) => i.text).join(" "), source: "captions" }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    if (msg.includes("private")) return { ok: false, error: "private_video", message: "This video is private." }
-    return { ok: false, error: "no_captions", message: "Could not fetch captions via innertube." }
+    const playerData: Record<string, unknown> = JSON.parse(match[1])
+    const result = await captionsFromPlayerData(playerData)
+    if (result) return result
+    return { ok: false, error: "no_captions", message: "No captions on watch page." }
+  } catch {
+    return { ok: false, error: "no_captions", message: "Watch page scrape failed." }
   }
 }
 
@@ -219,14 +318,20 @@ export async function fetchTranscript(videoId: string): Promise<TranscriptResult
   if (captions.ok) return captions
   if (captions.error === "private_video" || captions.error === "livestream") return captions
 
-  // Attempt 2: YouTube innertube API (Android client — works on Vercel IPs)
+  // Attempt 2: innertube API — tries iOS, Android, TV clients
   console.log(`[ingest] Scraper blocked for ${videoId}, trying innertube`)
   const innertube = await fetchCaptionsViaInnertube(videoId)
   if (innertube.ok) return innertube
   if (innertube.error === "private_video" || innertube.error === "livestream") return innertube
 
-  // Attempt 3: Whisper transcription via audio download
-  console.log(`[ingest] Innertube failed for ${videoId}, falling back to Whisper`)
+  // Attempt 3: watch-page HTML scrape (different network path from API endpoints)
+  console.log(`[ingest] Innertube failed for ${videoId}, trying watch page`)
+  const watchPage = await fetchCaptionsFromWatchPage(videoId)
+  if (watchPage.ok) return watchPage
+  if (watchPage.error === "private_video" || watchPage.error === "livestream") return watchPage
+
+  // Attempt 4: Whisper transcription via audio download
+  console.log(`[ingest] Watch page failed for ${videoId}, falling back to Whisper`)
   return transcribeWithWhisper(videoId)
 }
 
