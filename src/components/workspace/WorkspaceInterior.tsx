@@ -183,7 +183,12 @@ export function WorkspaceInterior({ workspaceId, workspaceName, breadcrumb = [] 
             .then((lecture: Lecture) => {
               setTimeout(() => {
                 if (lecture?.id) {
-                  setLectures((prev) => prev.find((l) => l.id === lecture.id) ? prev : [...prev, lecture])
+                  setLectures((prev) => {
+                    const exists = prev.some((l) => l.id === lecture.id)
+                    return exists
+                      ? prev.map((l) => l.id === lecture.id ? lecture : l)
+                      : [...prev, lecture]
+                  })
                 }
                 setProcessingId(null)
                 setProcessingEvents([])
@@ -201,6 +206,15 @@ export function WorkspaceInterior({ workspaceId, workspaceName, breadcrumb = [] 
   }, [processingId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
+
+  // Refresh when user navigates back to this tab while a lecture was processing
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") refresh()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    return () => document.removeEventListener("visibilitychange", onVisible)
+  }, [refresh])
 
   const docCreatedAt = useChatStore((s) => s.docCreatedAt)
   useEffect(() => {
