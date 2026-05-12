@@ -187,11 +187,18 @@ const INNERTUBE_CLIENTS: InnertubeClient[] = [
   },
 ]
 
+// Returns null when the client was blocked (LOGIN_REQUIRED) so the caller can try the next client.
+// Only returns a hard error for livestreams.
 async function captionsFromPlayerData(
   playerData: Record<string, unknown>
 ): Promise<TranscriptResult | null> {
   const status = (playerData?.playabilityStatus as { status?: string })?.status
-  if (status === "LOGIN_REQUIRED") return { ok: false, error: "private_video", message: "This video is private." }
+  // LOGIN_REQUIRED on a server IP means YouTube blocked this client, not that the video is private.
+  // Return null so the caller tries the next client.
+  if (status === "LOGIN_REQUIRED") {
+    console.log("[ingest] LOGIN_REQUIRED — client likely blocked, will retry with next client")
+    return null
+  }
   if (
     status === "LIVE_STREAM_OFFLINE" ||
     (playerData?.videoDetails as { isLive?: boolean })?.isLive
@@ -268,18 +275,15 @@ async function fetchCaptionsViaInnertube(videoId: string): Promise<TranscriptRes
 
       const playerData = await playerRes.json()
       const result = await captionsFromPlayerData(playerData)
-      if (result?.ok === false && (result.error === "private_video" || result.error === "livestream")) {
-        return result
-      }
+      // Only livestream is a hard stop — private_video could be a false positive from a blocked client
+      if (result?.ok === false && result.error === "livestream") return result
       if (result?.ok) {
         console.log(`[ingest] ${client.clientName} succeeded`)
         return result
       }
-      // null or no captions — try next client
+      // null = client was blocked; no_captions = no tracks — try next client
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes("private")) return { ok: false, error: "private_video", message: "This video is private." }
-      console.log(`[ingest] ${client.clientName} threw: ${msg}`)
+      console.log(`[ingest] ${client.clientName} threw: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
   return { ok: false, error: "no_captions", message: "No captions found via innertube." }
@@ -304,6 +308,11 @@ async function fetchCaptionsFromWatchPage(videoId: string): Promise<TranscriptRe
     if (!match) return { ok: false, error: "no_captions", message: "Could not parse watch page." }
 
     const playerData: Record<string, unknown> = JSON.parse(match[1])
+    const status = (playerData?.playabilityStatus as { status?: string })?.status
+    if (status === "LOGIN_REQUIRED") {
+      // Watch page is also blocked on this IP — treat as no_captions so Whisper can try
+      return { ok: false, error: "no_captions", message: "Watch page blocked." }
+    }
     const result = await captionsFromPlayerData(playerData)
     if (result) return result
     return { ok: false, error: "no_captions", message: "No captions on watch page." }
