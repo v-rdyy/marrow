@@ -256,7 +256,46 @@ async function transcribeWithWhisper(videoId: string): Promise<TranscriptResult>
   }
 }
 
-// Attempt 2: YouTube legacy timedtext API — different endpoint, often not IP-blocked
+// Attempt 2: Supadata API — third-party service with non-blocked IPs, free tier
+async function fetchCaptionsViaSupadata(videoId: string): Promise<TranscriptResult> {
+  const apiKey = process.env.SUPADATA_API_KEY
+  if (!apiKey) return { ok: false, error: "no_captions", message: "Supadata not configured." }
+
+  try {
+    console.log(`[ingest] Trying Supadata for ${videoId}`)
+    const res = await fetch(
+      `https://api.supadata.ai/v1/youtube/transcript?videoId=${videoId}&text=false`,
+      { headers: { "x-api-key": apiKey } }
+    )
+    if (!res.ok) {
+      console.log(`[ingest] Supadata HTTP ${res.status}`)
+      return { ok: false, error: "no_captions", message: "Supadata request failed." }
+    }
+
+    const data = await res.json()
+    // Response: { content: [{ text, offset, duration }], lang }
+    const items: { text: string; offset: number; duration?: number }[] = data.content ?? []
+    const rawItems = items
+      .filter((i) => i.text?.trim())
+      .map((i) => ({
+        text: i.text.trim(),
+        start: (i.offset ?? 0) / 1000,
+        end: ((i.offset ?? 0) + (i.duration ?? 3000)) / 1000,
+      }))
+
+    if (rawItems.length === 0) {
+      return { ok: false, error: "no_captions", message: "No transcript from Supadata." }
+    }
+
+    console.log(`[ingest] Supadata succeeded for ${videoId}`)
+    return { ok: true, chunks: buildChunks(rawItems), rawText: rawItems.map((i) => i.text).join(" "), source: "captions" }
+  } catch (err) {
+    console.log(`[ingest] Supadata error: ${err instanceof Error ? err.message : err}`)
+    return { ok: false, error: "no_captions", message: "Supadata failed." }
+  }
+}
+
+// Attempt 3: YouTube legacy timedtext API — different endpoint, often not IP-blocked
 async function fetchCaptionsViaTimedtext(videoId: string): Promise<TranscriptResult> {
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -298,18 +337,23 @@ export async function fetchTranscript(videoId: string): Promise<TranscriptResult
   if (captions.ok) return captions
   if (captions.error === "private_video" || captions.error === "livestream") return captions
 
-  // Attempt 2: legacy timedtext API (different endpoint — might not be IP-blocked)
-  console.log(`[ingest] Scraper failed for ${videoId}, trying timedtext`)
+  // Attempt 2: Supadata — works from cloud IPs (Vercel), skipped if no API key
+  console.log(`[ingest] Scraper failed for ${videoId}, trying Supadata`)
+  const supadata = await fetchCaptionsViaSupadata(videoId)
+  if (supadata.ok) return supadata
+
+  // Attempt 3: legacy timedtext API (different endpoint — might not be IP-blocked)
+  console.log(`[ingest] Supadata failed for ${videoId}, trying timedtext`)
   const timedtext = await fetchCaptionsViaTimedtext(videoId)
   if (timedtext.ok) return timedtext
 
-  // Attempt 3: youtubei.js — generates proper auth tokens for data-center IPs
+  // Attempt 5: youtubei.js — generates proper auth tokens for data-center IPs
   console.log(`[ingest] Timedtext failed for ${videoId}, trying youtubei.js`)
   const yjsResult = await fetchCaptionsViaYoutubeJS(videoId)
   if (yjsResult.ok) return yjsResult
   if (yjsResult.error === "livestream") return yjsResult
 
-  // Attempt 4: Whisper — audio download via youtubei.js + OpenAI transcription
+  // Attempt 6: Whisper — audio download via youtubei.js + OpenAI transcription
   console.log(`[ingest] youtubei.js failed for ${videoId}, trying Whisper`)
   return transcribeWithWhisper(videoId)
 }
