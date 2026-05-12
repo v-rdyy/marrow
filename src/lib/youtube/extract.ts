@@ -252,20 +252,61 @@ async function transcribeWithWhisper(videoId: string): Promise<TranscriptResult>
   }
 }
 
+// Attempt 2: YouTube legacy timedtext API — different endpoint, often not IP-blocked
+async function fetchCaptionsViaTimedtext(videoId: string): Promise<TranscriptResult> {
+  const headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+  }
+  const attempts = [
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=json3&kind=asr`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=json3`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en-US&fmt=json3&kind=asr`,
+  ]
+  for (const url of attempts) {
+    try {
+      const res = await fetch(url, { headers })
+      if (!res.ok) continue
+      const data = await res.json()
+      const events: { segs?: { utf8?: string }[]; tStartMs?: number; dDurationMs?: number }[] = data.events ?? []
+      const rawItems = events
+        .filter((e) => e.segs)
+        .map((e) => ({
+          text: e.segs!.map((s) => s.utf8 ?? "").join("").replace(/\n/g, " ").trim(),
+          start: (e.tStartMs ?? 0) / 1000,
+          end: ((e.tStartMs ?? 0) + (e.dDurationMs ?? 3000)) / 1000,
+        }))
+        .filter((item) => item.text.length > 0)
+      if (rawItems.length > 0) {
+        console.log(`[ingest] Timedtext succeeded for ${videoId}`)
+        return { ok: true, chunks: buildChunks(rawItems), rawText: rawItems.map((i) => i.text).join(" "), source: "captions" }
+      }
+    } catch {
+      continue
+    }
+  }
+  return { ok: false, error: "no_captions", message: "Timedtext unavailable." }
+}
+
 export async function fetchTranscript(videoId: string): Promise<TranscriptResult> {
   // Attempt 1: simple scraper (fast, works on residential/localhost IPs)
   const captions = await fetchCaptions(videoId)
   if (captions.ok) return captions
   if (captions.error === "private_video" || captions.error === "livestream") return captions
 
-  // Attempt 2: youtubei.js — generates proper auth tokens for data-center IPs (Vercel)
-  console.log(`[ingest] Scraper failed for ${videoId}, trying youtubei.js`)
+  // Attempt 2: legacy timedtext API (different endpoint — might not be IP-blocked)
+  console.log(`[ingest] Scraper failed for ${videoId}, trying timedtext`)
+  const timedtext = await fetchCaptionsViaTimedtext(videoId)
+  if (timedtext.ok) return timedtext
+
+  // Attempt 3: youtubei.js — generates proper auth tokens for data-center IPs
+  console.log(`[ingest] Timedtext failed for ${videoId}, trying youtubei.js`)
   const yjsResult = await fetchCaptionsViaYoutubeJS(videoId)
   if (yjsResult.ok) return yjsResult
   if (yjsResult.error === "private_video" || yjsResult.error === "livestream") return yjsResult
 
-  // Attempt 3: Whisper — audio download via youtubei.js + OpenAI transcription
-  console.log(`[ingest] youtubei.js captions failed for ${videoId}, trying Whisper`)
+  // Attempt 4: Whisper — audio download via youtubei.js + OpenAI transcription
+  console.log(`[ingest] youtubei.js failed for ${videoId}, trying Whisper`)
   return transcribeWithWhisper(videoId)
 }
 
