@@ -373,7 +373,7 @@ export function WorkspaceInterior({ workspaceId, workspaceName, breadcrumb = [] 
     })
   }
 
-  const isEmpty = !loading && folders.length === 0 && lectures.length === 0 && documents.length === 0
+  const isEmpty = !loading && folders.length === 0 && lectures.length === 0 && documents.length === 0 && !uploadingName && !processingId
 
   // Breadcrumb: all items except the last (which is current — shown bold)
   const breadcrumbParents = breadcrumb.slice(0, -1)
