@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server"
 import { createServiceClient } from "@/lib/supabase/server"
-import { extractPdfText } from "@/lib/pdf-extract"
 
 export const maxDuration = 60
 
@@ -35,17 +34,10 @@ export async function POST(req: Request) {
 
   const title = file.name.replace(/\.pdf$/i, "")
 
-  // Extract text content using Claude's document API (handles digital + scanned PDFs)
-  let extractedText = ""
-  try {
-    extractedText = await extractPdfText(bytes)
-  } catch {
-    // Non-fatal — PDF still usable for viewing; AI will note text wasn't extracted
-  }
-
+  // Store immediately — text extraction happens lazily when the AI first reads it
   const { data, error } = await supabase
     .from("documents")
-    .insert({ title, content: extractedText, folder_id: folderId ?? null, type: "pdf", file_url: urlData.publicUrl })
+    .insert({ title, content: "", folder_id: folderId ?? null, type: "pdf", file_url: urlData.publicUrl })
     .select()
     .single()
 
